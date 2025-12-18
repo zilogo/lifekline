@@ -6,7 +6,7 @@
  *
  * 本地测试：http://localhost:8787
  */
-export const WORKER_URL = 'http://localhost:8787';
+export const WORKER_URL = 'https://lifekline-ai-proxy.zilogo.workers.dev';
 
 /**
  * 检查 Worker 是否已配置
