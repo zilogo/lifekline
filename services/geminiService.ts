@@ -131,6 +131,7 @@ export const generateLifeAnalysis = async (input: UserInput): Promise<LifeDestin
 
       const decoder = new TextDecoder();
       let accumulatedContent = '';
+      let rawBuffer = ''; // 保存原始响应文本
       let buffer = '';
 
       while (true) {
@@ -142,7 +143,9 @@ export const generateLifeAnalysis = async (input: UserInput): Promise<LifeDestin
         }
 
         // 解码数据块
-        buffer += decoder.decode(value, { stream: true });
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+        rawBuffer += chunk; // 同时保存原始文本
 
         // 按行分割处理 SSE 数据
         const lines = buffer.split('\n');
@@ -168,11 +171,16 @@ export const generateLifeAnalysis = async (input: UserInput): Promise<LifeDestin
             try {
               const parsed = JSON.parse(data);
               const delta = parsed.choices?.[0]?.delta?.content;
+              const message = parsed.choices?.[0]?.message?.content; // 处理非流式响应
+
               if (delta) {
                 accumulatedContent += delta;
+              } else if (message) {
+                // 如果是完整的 message 而不是 delta，直接使用
+                accumulatedContent = message;
               }
             } catch (e) {
-              console.warn('解析 SSE 数据失败:', data);
+              console.warn('解析 SSE 数据失败:', data.substring(0, 100));
             }
           }
         }
@@ -180,7 +188,25 @@ export const generateLifeAnalysis = async (input: UserInput): Promise<LifeDestin
 
       clearTimeout(timeoutId); // 确保清除超时定时器
 
-      const content = accumulatedContent;
+      // 如果 SSE 解析没有提取到内容，尝试从原始文本中提取
+      let content = accumulatedContent;
+      if (!content && rawBuffer) {
+        console.warn('SSE 解析未提取到内容，尝试解析原始响应');
+        // 移除所有 "data: " 前缀，提取 JSON
+        const dataLines = rawBuffer.split('\n')
+          .filter(line => line.trim().startsWith('data: '))
+          .map(line => line.trim().slice(6));
+
+        if (dataLines.length > 0) {
+          try {
+            // 尝试解析第一个完整的响应
+            const firstData = JSON.parse(dataLines[0]);
+            content = firstData.choices?.[0]?.message?.content || '';
+          } catch (e) {
+            console.error('备用解析失败:', e);
+          }
+        }
+      }
 
       if (!content) {
         throw new Error("模型未返回任何内容。");
