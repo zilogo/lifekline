@@ -31,12 +31,13 @@ export default {
         }, 500);
       }
 
-      // 4. 构建 AI API 请求
+      // 4. 构建 AI API 请求（启用流式输出）
       const aiRequest = {
         model: body.model || MODEL_NAME,
         messages: body.messages,
         response_format: body.response_format,
-        temperature: body.temperature || 0.7
+        temperature: body.temperature || 0.7,
+        stream: true  // 启用流式输出
       };
 
       // 5. 调用实际的 AI API
@@ -59,9 +60,19 @@ export default {
         }, response.status);
       }
 
-      // 7. 返回结果（添加 CORS 头）
-      const result = await response.json();
-      return jsonResponse(result, 200, request.headers.get('Origin'));
+      // 7. 直接转发流式响应（添加 CORS 头）
+      const origin = request.headers.get('Origin') || '*';
+      return new Response(response.body, {
+        status: response.status,
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+          'Access-Control-Allow-Origin': origin,
+          'Access-Control-Allow-Methods': 'POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type',
+        }
+      });
 
     } catch (error) {
       return jsonResponse({

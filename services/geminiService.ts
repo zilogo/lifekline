@@ -100,7 +100,7 @@ export const generateLifeAnalysis = async (input: UserInput): Promise<LifeDestin
     const timeoutId = setTimeout(() => controller.abort(), 5 * 60 * 1000); // 5分钟
 
     try {
-      // 调用 Cloudflare Worker 代理（保护 API Key）
+      // 调用 Cloudflare Worker 代理（保护 API Key）- 流式输出
       const response = await fetch(WORKER_URL, {
         method: 'POST',
         headers: {
@@ -118,15 +118,69 @@ export const generateLifeAnalysis = async (input: UserInput): Promise<LifeDestin
         signal: controller.signal
       });
 
-      clearTimeout(timeoutId); // 请求成功，清除超时定时器
-
       if (!response.ok) {
         const errText = await response.text();
         throw new Error(`API 请求失败: ${response.status} - ${errText}`);
       }
 
-      const jsonResult = await response.json();
-      const content = jsonResult.choices?.[0]?.message?.content;
+      // 处理流式响应
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error("无法读取响应流");
+      }
+
+      const decoder = new TextDecoder();
+      let accumulatedContent = '';
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+          clearTimeout(timeoutId); // 流结束，清除超时定时器
+          break;
+        }
+
+        // 解码数据块
+        buffer += decoder.decode(value, { stream: true });
+
+        // 按行分割处理 SSE 数据
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // 保留最后不完整的行
+
+        for (const line of lines) {
+          const trimmedLine = line.trim();
+
+          // 跳过空行和注释
+          if (!trimmedLine || trimmedLine.startsWith(':')) {
+            continue;
+          }
+
+          // 解析 SSE 格式：data: {...}
+          if (trimmedLine.startsWith('data: ')) {
+            const data = trimmedLine.slice(6); // 移除 "data: " 前缀
+
+            // 检查是否结束
+            if (data === '[DONE]') {
+              continue;
+            }
+
+            try {
+              const parsed = JSON.parse(data);
+              const delta = parsed.choices?.[0]?.delta?.content;
+              if (delta) {
+                accumulatedContent += delta;
+              }
+            } catch (e) {
+              console.warn('解析 SSE 数据失败:', data);
+            }
+          }
+        }
+      }
+
+      clearTimeout(timeoutId); // 确保清除超时定时器
+
+      const content = accumulatedContent;
 
       if (!content) {
         throw new Error("模型未返回任何内容。");
