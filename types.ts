@@ -4,6 +4,25 @@ export enum Gender {
   FEMALE = 'Female',
 }
 
+// 出生日期时间
+export interface BirthDateTime {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute?: number;
+}
+
+// 计算结果
+export interface CalculatedBazi {
+  yearPillar: string;
+  monthPillar: string;
+  dayPillar: string;
+  hourPillar: string;
+  startAge: number;
+  firstDaYun: string;
+}
+
 export interface UserInput {
   name?: string;
   gender: Gender;
@@ -14,7 +33,11 @@ export interface UserInput {
   hourPillar: string;  // 时柱
   startAge: string;    // 起运年龄 (虚岁) - Changed to string to handle input field state easily, parse later
   firstDaYun: string;  // 第一步大运干支
-  
+
+  // New fields for auto-calculation
+  birthDateTime?: BirthDateTime;  // 可选：用于自动计算
+  isManualOverride?: boolean;     // 标记用户是否手动修改
+
   // New API Configuration Fields
   modelName: string;   // 使用的模型名称
   apiBaseUrl: string;

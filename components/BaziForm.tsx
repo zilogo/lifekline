@@ -1,7 +1,10 @@
 
 import React, { useState, useMemo } from 'react';
-import { UserInput, Gender } from '../types';
-import { Loader2, Sparkles, AlertCircle, TrendingUp, Settings } from 'lucide-react';
+import { UserInput, Gender, BirthDateTime } from '../types';
+import { Loader2, Sparkles, AlertCircle, TrendingUp, Calendar } from 'lucide-react';
+import { calculateBazi, validateBirthDateTime } from '../utils/baziCalculator';
+import { useConfig } from '../contexts/ConfigContext';
+import { isWorkerConfigured } from '../config/workerConfig';
 
 interface BaziFormProps {
   onSubmit: (data: UserInput) => void;
@@ -9,6 +12,8 @@ interface BaziFormProps {
 }
 
 const BaziForm: React.FC<BaziFormProps> = ({ onSubmit, isLoading }) => {
+  const { apiConfig } = useConfig();
+
   const [formData, setFormData] = useState<UserInput>({
     name: '',
     gender: Gender.MALE,
@@ -19,43 +24,99 @@ const BaziForm: React.FC<BaziFormProps> = ({ onSubmit, isLoading }) => {
     hourPillar: '',
     startAge: '',
     firstDaYun: '',
-    modelName: 'gemini-3-pro-preview',
-    apiBaseUrl: 'https://max.openai365.top/v1',
+    modelName: '',
+    apiBaseUrl: '',
     apiKey: '',
   });
 
-  const [formErrors, setFormErrors] = useState<{modelName?: string, apiBaseUrl?: string, apiKey?: string}>({});
+  // New state for auto-calculation
+  const [birthDateTime, setBirthDateTime] = useState<BirthDateTime>({
+    year: new Date().getFullYear(),
+    month: 1,
+    day: 1,
+    hour: 0,
+    minute: 0
+  });
+
+  const [calculationMode, setCalculationMode] = useState<'manual' | 'auto'>('manual');
+  const [calculatedFields, setCalculatedFields] = useState<Set<string>>(new Set());
+  const [calculationError, setCalculationError] = useState<string | null>(null);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
-    // Clear error when user types
-    if (name === 'apiBaseUrl' || name === 'apiKey' || name === 'modelName') {
-      setFormErrors(prev => ({ ...prev, [name]: undefined }));
+  };
+
+  const handlePillarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+
+    // If user edits a calculated field, mark as manual override
+    if (calculatedFields.has(name)) {
+      setFormData(prev => ({ ...prev, [name]: value, isManualOverride: true }));
+      setCalculationMode('manual');
+    } else {
+      setFormData(prev => ({ ...prev, [name]: value }));
+    }
+  };
+
+  const handleBirthDateTimeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setBirthDateTime(prev => ({ ...prev, [name]: parseInt(value) || 0 }));
+    setCalculationError(null);
+  };
+
+  const handleAutoCalculate = () => {
+    try {
+      // 1. Validate input
+      const validation = validateBirthDateTime(birthDateTime);
+      if (!validation.valid) {
+        setCalculationError(validation.error || '输入无效');
+        return;
+      }
+
+      // 2. Calculate Bazi
+      const calculated = calculateBazi(birthDateTime, formData.gender);
+
+      // 3. Update form data
+      setFormData(prev => ({
+        ...prev,
+        birthYear: birthDateTime.year.toString(),
+        yearPillar: calculated.yearPillar,
+        monthPillar: calculated.monthPillar,
+        dayPillar: calculated.dayPillar,
+        hourPillar: calculated.hourPillar,
+        startAge: calculated.startAge.toString(),
+        firstDaYun: calculated.firstDaYun,
+        isManualOverride: false
+      }));
+
+      // 4. Mark as auto-calculated
+      setCalculatedFields(new Set(['yearPillar', 'monthPillar', 'dayPillar', 'hourPillar', 'startAge', 'firstDaYun']));
+      setCalculationMode('auto');
+      setCalculationError(null);
+    } catch (error) {
+      setCalculationError(error instanceof Error ? error.message : '计算失败');
     }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    
-    // Validate API Config
-    const errors: {modelName?: string, apiBaseUrl?: string, apiKey?: string} = {};
-    if (!formData.modelName.trim()) {
-      errors.modelName = '请输入模型名称';
-    }
-    if (!formData.apiBaseUrl.trim()) {
-      errors.apiBaseUrl = '请输入 API Base URL';
-    }
-    if (!formData.apiKey.trim()) {
-      errors.apiKey = '请输入 API Key';
-    }
 
-    if (Object.keys(errors).length > 0) {
-      setFormErrors(errors);
+    // 检查 Worker 是否配置
+    if (!isWorkerConfigured()) {
+      alert('⚠️ Worker 未配置，请联系开发者');
       return;
     }
 
-    onSubmit(formData);
+    // Worker 已配置，直接提交（modelName 可选）
+    const completeData: UserInput = {
+      ...formData,
+      modelName: apiConfig?.modelName,
+      apiBaseUrl: '', // 不再需要，Worker 会处理
+      apiKey: ''      // 不再需要，Worker 会处理
+    };
+
+    onSubmit(completeData);
   };
 
   // Calculate direction for UI feedback
@@ -130,11 +191,114 @@ const BaziForm: React.FC<BaziFormProps> = ({ onSubmit, isLoading }) => {
           </div>
         </div>
 
-        {/* Four Pillars Manual Input */}
+        {/* Birth Date/Time Input Section - NEW */}
+        <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2 text-blue-800 text-sm font-bold">
+              <Calendar className="w-4 h-4" />
+              <span>出生日期时间 (阳历)</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleAutoCalculate}
+              className="px-3 py-1 bg-blue-600 text-white text-xs rounded-lg hover:bg-blue-700 transition flex items-center gap-1"
+            >
+              <Sparkles className="w-3 h-3" />
+              <span>自动计算</span>
+            </button>
+          </div>
+
+          <div className="grid gap-2" style={{ gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr' }}>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">年</label>
+              <input
+                type="number"
+                name="year"
+                min="1900"
+                max="2100"
+                value={birthDateTime.year}
+                onChange={handleBirthDateTimeChange}
+                className="w-full px-2 py-1.5 border border-blue-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">月</label>
+              <input
+                type="number"
+                name="month"
+                min="1"
+                max="12"
+                value={birthDateTime.month}
+                onChange={handleBirthDateTimeChange}
+                className="w-full px-2 py-1.5 border border-blue-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">日</label>
+              <input
+                type="number"
+                name="day"
+                min="1"
+                max="31"
+                value={birthDateTime.day}
+                onChange={handleBirthDateTimeChange}
+                className="w-full px-2 py-1.5 border border-blue-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">时</label>
+              <input
+                type="number"
+                name="hour"
+                min="0"
+                max="23"
+                value={birthDateTime.hour}
+                onChange={handleBirthDateTimeChange}
+                className="w-full px-2 py-1.5 border border-blue-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">分</label>
+              <input
+                type="number"
+                name="minute"
+                min="0"
+                max="59"
+                value={birthDateTime.minute}
+                onChange={handleBirthDateTimeChange}
+                className="w-full px-2 py-1.5 border border-blue-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white"
+              />
+            </div>
+          </div>
+
+          {calculationError && (
+            <div className="mt-2 flex items-center gap-2 text-red-600 bg-red-50 px-3 py-2 rounded-lg border border-red-100 text-xs">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <span>{calculationError}</span>
+            </div>
+          )}
+
+          {calculationMode === 'auto' && !formData.isManualOverride && (
+            <div className="mt-2 text-xs text-green-600 flex items-center gap-1">
+              <Sparkles className="w-3 h-3" />
+              <span>已自动计算四柱和大运信息</span>
+            </div>
+          )}
+        </div>
+
+        {/* Four Pillars Input (Auto-calculated or Manual) */}
         <div className="bg-amber-50 p-4 rounded-xl border border-amber-100">
-          <div className="flex items-center gap-2 mb-3 text-amber-800 text-sm font-bold">
-            <Sparkles className="w-4 h-4" />
-            <span>输入四柱干支 (必填)</span>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2 text-amber-800 text-sm font-bold">
+              <Sparkles className="w-4 h-4" />
+              <span>四柱干支 {calculationMode === 'auto' && !formData.isManualOverride ? '(已自动计算)' : '(手动输入)'}</span>
+            </div>
+            {formData.isManualOverride && (
+              <div className="text-xs text-yellow-600 flex items-center gap-1">
+                <AlertCircle className="w-3 h-3" />
+                <span>已手动修改</span>
+              </div>
+            )}
           </div>
           
           {/* Birth Year Input - Added as requested */}
@@ -154,89 +318,101 @@ const BaziForm: React.FC<BaziFormProps> = ({ onSubmit, isLoading }) => {
           </div>
 
           <div className="grid grid-cols-2 gap-4">
-            <div>
+            <div className="relative">
               <label className="block text-xs font-bold text-gray-600 mb-1">年柱 (Year)</label>
               <input
                 type="text"
                 name="yearPillar"
-                required
                 value={formData.yearPillar}
-                onChange={handleChange}
+                onChange={handlePillarChange}
                 placeholder="如: 甲子"
                 className="w-full px-3 py-2 border border-amber-200 rounded-lg focus:ring-2 focus:ring-amber-500 outline-none bg-white text-center font-serif-sc font-bold"
               />
+              {calculatedFields.has('yearPillar') && !formData.isManualOverride && (
+                <span className="absolute top-1 right-1 bg-blue-500 text-white text-[10px] px-1.5 py-0.5 rounded">自动</span>
+              )}
             </div>
-            <div>
+            <div className="relative">
               <label className="block text-xs font-bold text-gray-600 mb-1">月柱 (Month)</label>
               <input
                 type="text"
                 name="monthPillar"
-                required
                 value={formData.monthPillar}
-                onChange={handleChange}
+                onChange={handlePillarChange}
                 placeholder="如: 丙寅"
                 className="w-full px-3 py-2 border border-amber-200 rounded-lg focus:ring-2 focus:ring-amber-500 outline-none bg-white text-center font-serif-sc font-bold"
               />
+              {calculatedFields.has('monthPillar') && !formData.isManualOverride && (
+                <span className="absolute top-1 right-1 bg-blue-500 text-white text-[10px] px-1.5 py-0.5 rounded">自动</span>
+              )}
             </div>
-            <div>
+            <div className="relative">
               <label className="block text-xs font-bold text-gray-600 mb-1">日柱 (Day)</label>
               <input
                 type="text"
                 name="dayPillar"
-                required
                 value={formData.dayPillar}
-                onChange={handleChange}
+                onChange={handlePillarChange}
                 placeholder="如: 戊辰"
                 className="w-full px-3 py-2 border border-amber-200 rounded-lg focus:ring-2 focus:ring-amber-500 outline-none bg-white text-center font-serif-sc font-bold"
               />
+              {calculatedFields.has('dayPillar') && !formData.isManualOverride && (
+                <span className="absolute top-1 right-1 bg-blue-500 text-white text-[10px] px-1.5 py-0.5 rounded">自动</span>
+              )}
             </div>
-            <div>
+            <div className="relative">
               <label className="block text-xs font-bold text-gray-600 mb-1">时柱 (Hour)</label>
               <input
                 type="text"
                 name="hourPillar"
-                required
                 value={formData.hourPillar}
-                onChange={handleChange}
+                onChange={handlePillarChange}
                 placeholder="如: 壬戌"
                 className="w-full px-3 py-2 border border-amber-200 rounded-lg focus:ring-2 focus:ring-amber-500 outline-none bg-white text-center font-serif-sc font-bold"
               />
+              {calculatedFields.has('hourPillar') && !formData.isManualOverride && (
+                <span className="absolute top-1 right-1 bg-blue-500 text-white text-[10px] px-1.5 py-0.5 rounded">自动</span>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Da Yun Manual Input */}
+        {/* Da Yun Input (Auto-calculated or Manual) */}
         <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100">
           <div className="flex items-center gap-2 mb-3 text-indigo-800 text-sm font-bold">
             <TrendingUp className="w-4 h-4" />
-            <span>大运排盘信息 (必填)</span>
+            <span>大运排盘信息 {calculationMode === 'auto' && !formData.isManualOverride ? '(已自动计算)' : '(手动输入)'}</span>
           </div>
           <div className="grid grid-cols-2 gap-4">
-            <div>
+            <div className="relative">
               <label className="block text-xs font-bold text-gray-600 mb-1">起运年龄 (虚岁)</label>
               <input
                 type="number"
                 name="startAge"
-                required
                 min="1"
                 max="100"
                 value={formData.startAge}
-                onChange={handleChange}
+                onChange={handlePillarChange}
                 placeholder="如: 3"
                 className="w-full px-3 py-2 border border-indigo-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white text-center font-bold"
               />
+              {calculatedFields.has('startAge') && !formData.isManualOverride && (
+                <span className="absolute top-1 right-1 bg-blue-500 text-white text-[10px] px-1.5 py-0.5 rounded">自动</span>
+              )}
             </div>
-            <div>
+            <div className="relative">
               <label className="block text-xs font-bold text-gray-600 mb-1">第一步大运</label>
               <input
                 type="text"
                 name="firstDaYun"
-                required
                 value={formData.firstDaYun}
-                onChange={handleChange}
+                onChange={handlePillarChange}
                 placeholder="如: 丁卯"
                 className="w-full px-3 py-2 border border-indigo-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white text-center font-serif-sc font-bold"
               />
+              {calculatedFields.has('firstDaYun') && !formData.isManualOverride && (
+                <span className="absolute top-1 right-1 bg-blue-500 text-white text-[10px] px-1.5 py-0.5 rounded">自动</span>
+              )}
             </div>
           </div>
            <p className="text-xs text-indigo-600/70 mt-2 text-center">
@@ -245,55 +421,17 @@ const BaziForm: React.FC<BaziFormProps> = ({ onSubmit, isLoading }) => {
           </p>
         </div>
 
-        {/* API Configuration Section */}
-        <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
-          <div className="flex items-center gap-2 mb-3 text-gray-700 text-sm font-bold">
-            <Settings className="w-4 h-4" />
-            <span>模型接口设置 (必填)</span>
+        {/* Worker Config Warning */}
+        {!isWorkerConfigured() && (
+          <div className="bg-yellow-50 border border-yellow-200 text-yellow-700 px-4 py-3 rounded-lg text-sm flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            <span>⚠️ Worker 未配置，请联系开发者</span>
           </div>
-          <div className="space-y-3">
-             <div>
-               <label className="block text-xs font-bold text-gray-600 mb-1">使用模型</label>
-               <input
-                  type="text"
-                  name="modelName"
-                  value={formData.modelName}
-                  onChange={handleChange}
-                  placeholder="gemini-3-pro-preview"
-                  className={`w-full px-3 py-2 border rounded-lg text-xs font-mono outline-none ${formErrors.modelName ? 'border-red-500 bg-red-50' : 'border-gray-300 focus:ring-2 focus:ring-gray-400'}`}
-                />
-                {formErrors.modelName && <p className="text-red-500 text-xs mt-1">{formErrors.modelName}</p>}
-             </div>
-             <div>
-               <label className="block text-xs font-bold text-gray-600 mb-1">API Base URL</label>
-               <input
-                  type="text"
-                  name="apiBaseUrl"
-                  value={formData.apiBaseUrl}
-                  onChange={handleChange}
-                  placeholder="https://max.openai365.top/v1"
-                  className={`w-full px-3 py-2 border rounded-lg text-xs font-mono outline-none ${formErrors.apiBaseUrl ? 'border-red-500 bg-red-50' : 'border-gray-300 focus:ring-2 focus:ring-gray-400'}`}
-                />
-                {formErrors.apiBaseUrl && <p className="text-red-500 text-xs mt-1">{formErrors.apiBaseUrl}</p>}
-             </div>
-             <div>
-               <label className="block text-xs font-bold text-gray-600 mb-1">API Key</label>
-               <input
-                  type="password"
-                  name="apiKey"
-                  value={formData.apiKey}
-                  onChange={handleChange}
-                  placeholder="sk-..."
-                  className={`w-full px-3 py-2 border rounded-lg text-xs font-mono outline-none ${formErrors.apiKey ? 'border-red-500 bg-red-50' : 'border-gray-300 focus:ring-2 focus:ring-gray-400'}`}
-                />
-                {formErrors.apiKey && <p className="text-red-500 text-xs mt-1">{formErrors.apiKey}</p>}
-             </div>
-          </div>
-        </div>
+        )}
 
         <button
           type="submit"
-          disabled={isLoading}
+          disabled={isLoading || !isWorkerConfigured()}
           className="w-full bg-gradient-to-r from-indigo-900 to-gray-900 hover:from-black hover:to-black text-white font-bold py-3.5 rounded-xl shadow-lg transform transition-all hover:scale-[1.01] active:scale-[0.99] disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2"
         >
           {isLoading ? (

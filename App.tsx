@@ -3,16 +3,35 @@ import React, { useState } from 'react';
 import BaziForm from './components/BaziForm';
 import LifeKLineChart from './components/LifeKLineChart';
 import AnalysisResult from './components/AnalysisResult';
+import AdminLogin from './components/AdminLogin';
+import AdminSettings from './components/AdminSettings';
 import { UserInput, LifeDestinyResult } from './types';
 import { generateLifeAnalysis } from './services/geminiService';
 import { API_STATUS } from './constants';
-import { Sparkles, AlertCircle, BookOpen, Key } from 'lucide-react';
+import { Sparkles, AlertCircle } from 'lucide-react';
+import { ConfigProvider } from './contexts/ConfigContext';
+import { isAuthenticated } from './utils/configManager';
+
+enum PageView {
+  MAIN = 'MAIN',
+  ADMIN = 'ADMIN'
+}
 
 const App: React.FC = () => {
+  const [currentView, setCurrentView] = useState<PageView>(PageView.MAIN);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<LifeDestinyResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [userName, setUserName] = useState<string>('');
+
+  // 管理后台路由
+  if (currentView === PageView.ADMIN) {
+    if (!isAuthenticated()) {
+      return <AdminLogin onLoginSuccess={() => setIsLoggedIn(true)} />;
+    }
+    return <AdminSettings onBack={() => setCurrentView(PageView.MAIN)} />;
+  }
 
   const handleFormSubmit = async (data: UserInput) => {
     // 检查系统状态
@@ -53,7 +72,7 @@ const App: React.FC = () => {
           </div>
           <div className="flex items-center gap-6">
             <div className="hidden md:block text-sm text-gray-400 font-medium bg-gray-100 px-3 py-1 rounded-full">
-               基于 AI 大模型驱动 推特@0xSakura666
+               基于 AI 大模型驱动
             </div>
           </div>
         </div>
@@ -76,10 +95,9 @@ const App: React.FC = () => {
                 助您发现人生牛市，规避风险熊市，把握关键转折点。
               </p>
 
-              {/* Tutorial Buttons Group */}
-              <div className="flex flex-row gap-4 w-full max-w-lg mb-4">
-                {/* Usage Tutorial */}
-                <a 
+              {/* Tutorial Buttons Group - Hidden */}
+              {/* <div className="flex flex-row gap-4 w-full max-w-lg mb-4">
+                <a
                   href="https://jcnjmxofi1yl.feishu.cn/wiki/OPa4woxiBiFP9okQ9yWcbcXpnEw"
                   target="_blank"
                   rel="noopener noreferrer"
@@ -91,8 +109,7 @@ const App: React.FC = () => {
                   <span className="text-base font-bold text-gray-800 group-hover:text-indigo-700 transition-colors">使用教程</span>
                 </a>
 
-                {/* API Tutorial */}
-                <a 
+                <a
                   href="https://jcnjmxofi1yl.feishu.cn/wiki/JX0iwzoeqie3GEkJ8XQcMesan3c"
                   target="_blank"
                   rel="noopener noreferrer"
@@ -103,7 +120,7 @@ const App: React.FC = () => {
                   </div>
                   <span className="text-base font-bold text-gray-800 group-hover:text-emerald-700 transition-colors">API教程</span>
                 </a>
-              </div>
+              </div> */}
             </div>
             
             <BaziForm onSubmit={handleFormSubmit} isLoading={loading} />
@@ -158,11 +175,25 @@ const App: React.FC = () => {
       {/* Footer */}
       <footer className="w-full bg-gray-900 text-gray-400 py-8 mt-auto">
         <div className="max-w-7xl mx-auto px-4 text-center text-sm">
-          <p>&copy; {new Date().getFullYear()} 人生K线项目 推特@0xSakura666 | 仅供娱乐与文化研究，请勿迷信</p>
+          <p>
+            &copy; {new Date().getFullYear()} 人生K线项目 | 仅供娱乐与文化研究，
+            <button
+              onClick={() => setCurrentView(PageView.ADMIN)}
+              className="ml-1"
+            >
+              请勿迷信
+            </button>
+          </p>
         </div>
       </footer>
     </div>
   );
 };
 
-export default App;
+export default function AppWrapper() {
+  return (
+    <ConfigProvider>
+      <App />
+    </ConfigProvider>
+  );
+}

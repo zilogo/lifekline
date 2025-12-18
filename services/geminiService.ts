@@ -1,6 +1,7 @@
 
 import { UserInput, LifeDestinyResult, Gender } from "../types";
 import { BAZI_SYSTEM_INSTRUCTION } from "../constants";
+import { WORKER_URL } from "../config/workerConfig";
 
 // Helper to determine stem polarity
 const getStemPolarity = (pillar: string): 'YANG' | 'YIN' => {
@@ -15,20 +16,13 @@ const getStemPolarity = (pillar: string): 'YANG' | 'YIN' => {
 };
 
 export const generateLifeAnalysis = async (input: UserInput): Promise<LifeDestinyResult> => {
-  
-  const { apiKey, apiBaseUrl, modelName } = input;
 
-  if (!apiKey || !apiKey.trim()) {
-    throw new Error("请在表单中填写有效的 API Key");
-  }
-  if (!apiBaseUrl || !apiBaseUrl.trim()) {
-    throw new Error("请在表单中填写有效的 API Base URL");
-  }
+  const { modelName } = input;
 
-  // Remove trailing slash if present
-  const cleanBaseUrl = apiBaseUrl.replace(/\/+$/, "");
-  // Use user provided model name or fallback
-  const targetModel = modelName && modelName.trim() ? modelName.trim() : "gemini-3-pro-preview";
+  // 验证 Worker 是否配置
+  if (!WORKER_URL || WORKER_URL.trim().length === 0) {
+    throw new Error("Worker 未配置，请联系开发者");
+  }
 
   const genderStr = input.gender === Gender.MALE ? '男 (乾造)' : '女 (坤造)';
   const startAgeInt = parseInt(input.startAge) || 1;
@@ -45,12 +39,18 @@ export const generateLifeAnalysis = async (input: UserInput): Promise<LifeDestin
 
   const daYunDirectionStr = isForward ? '顺行 (Forward)' : '逆行 (Backward)';
   
-  const directionExample = isForward 
-    ? "例如：第一步是【戊申】，第二步则是【己酉】（顺排）" 
+  const directionExample = isForward
+    ? "例如：第一步是【戊申】，第二步则是【己酉】（顺排）"
     : "例如：第一步是【戊申】，第二步则是【丁未】（逆排）";
+
+  // Add calculation mode indicator
+  const calculationNote = input.isManualOverride
+    ? "(用户手动输入)"
+    : "(系统自动计算)";
 
   const userPrompt = `
     请根据以下**已经排好的**八字四柱和**指定的大运信息**进行分析。
+    注：本次数据${calculationNote}
     
     【基本信息】
     性别：${genderStr}
@@ -95,61 +95,112 @@ export const generateLifeAnalysis = async (input: UserInput): Promise<LifeDestin
   `;
 
   try {
-    const response = await fetch(`${cleanBaseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model: targetModel, 
-        messages: [
-          { role: "system", content: BAZI_SYSTEM_INSTRUCTION },
-          { role: "user", content: userPrompt }
-        ],
-        response_format: { type: "json_object" },
-        temperature: 0.7
-      })
-    });
+    // 创建 AbortController 用于超时控制（5分钟超时）
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5 * 60 * 1000); // 5分钟
 
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`API 请求失败: ${response.status} - ${errText}`);
+    try {
+      // 调用 Cloudflare Worker 代理（保护 API Key）
+      const response = await fetch(WORKER_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: modelName, // 可选，Worker 会使用默认值
+          messages: [
+            { role: "system", content: BAZI_SYSTEM_INSTRUCTION },
+            { role: "user", content: userPrompt }
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0.7
+        }),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId); // 请求成功，清除超时定时器
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`API 请求失败: ${response.status} - ${errText}`);
+      }
+
+      const jsonResult = await response.json();
+      const content = jsonResult.choices?.[0]?.message?.content;
+
+      if (!content) {
+        throw new Error("模型未返回任何内容。");
+      }
+
+      // 尝试提取JSON内容（处理模型可能返回的额外文本）
+      let cleanedContent = content.trim();
+
+      // 如果内容包含```json标记，提取其中的JSON
+      if (cleanedContent.includes('```json')) {
+        const jsonMatch = cleanedContent.match(/```json\s*([\s\S]*?)\s*```/);
+        if (jsonMatch) {
+          cleanedContent = jsonMatch[1].trim();
+        }
+      } else if (cleanedContent.includes('```')) {
+        // 处理普通```标记
+        const jsonMatch = cleanedContent.match(/```\s*([\s\S]*?)\s*```/);
+        if (jsonMatch) {
+          cleanedContent = jsonMatch[1].trim();
+        }
+      }
+
+      // 尝试找到第一个{和最后一个}之间的内容
+      const firstBrace = cleanedContent.indexOf('{');
+      const lastBrace = cleanedContent.lastIndexOf('}');
+
+      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        cleanedContent = cleanedContent.substring(firstBrace, lastBrace + 1);
+      }
+
+      // 解析 JSON
+      let data;
+      try {
+        data = JSON.parse(cleanedContent);
+      } catch (parseError: any) {
+        console.error("JSON解析失败:", parseError);
+        console.error("原始内容:", content);
+        console.error("清理后内容:", cleanedContent);
+        throw new Error(`AI返回的数据格式无效，无法解析为JSON。请尝试更换模型或检查API配置。详细错误: ${parseError.message}`);
+      }
+
+      // 简单校验数据完整性
+      if (!data.chartPoints || !Array.isArray(data.chartPoints)) {
+        throw new Error("模型返回的数据格式不正确（缺失 chartPoints）。");
+      }
+
+      return {
+        chartData: data.chartPoints,
+        analysis: {
+          bazi: data.bazi || [],
+          summary: data.summary || "无摘要",
+          summaryScore: data.summaryScore || 5,
+          industry: data.industry || "无",
+          industryScore: data.industryScore || 5,
+          wealth: data.wealth || "无",
+          wealthScore: data.wealthScore || 5,
+          marriage: data.marriage || "无",
+          marriageScore: data.marriageScore || 5,
+          health: data.health || "无",
+          healthScore: data.healthScore || 5,
+          family: data.family || "无",
+          familyScore: data.familyScore || 5,
+        },
+      };
+    } catch (fetchError: any) {
+      clearTimeout(timeoutId);
+
+      // 处理超时错误
+      if (fetchError.name === 'AbortError') {
+        throw new Error('请求超时（5分钟），请稍后重试或联系管理员');
+      }
+
+      throw fetchError;
     }
-
-    const jsonResult = await response.json();
-    const content = jsonResult.choices?.[0]?.message?.content;
-
-    if (!content) {
-      throw new Error("模型未返回任何内容。");
-    }
-
-    // 解析 JSON
-    const data = JSON.parse(content);
-
-    // 简单校验数据完整性
-    if (!data.chartPoints || !Array.isArray(data.chartPoints)) {
-      throw new Error("模型返回的数据格式不正确（缺失 chartPoints）。");
-    }
-
-    return {
-      chartData: data.chartPoints,
-      analysis: {
-        bazi: data.bazi || [],
-        summary: data.summary || "无摘要",
-        summaryScore: data.summaryScore || 5,
-        industry: data.industry || "无",
-        industryScore: data.industryScore || 5,
-        wealth: data.wealth || "无",
-        wealthScore: data.wealthScore || 5,
-        marriage: data.marriage || "无",
-        marriageScore: data.marriageScore || 5,
-        health: data.health || "无",
-        healthScore: data.healthScore || 5,
-        family: data.family || "无",
-        familyScore: data.familyScore || 5,
-      },
-    };
   } catch (error) {
     console.error("Gemini/OpenAI API Error:", error);
     throw error;

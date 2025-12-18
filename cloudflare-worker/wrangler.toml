@@ -1,0 +1,11 @@
+name = "lifekline-ai-proxy"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+# 环境变量在 Cloudflare Dashboard 中配置（保密）
+# 不要在代码中硬编码 API Key
+#
+# 部署后需要在 Dashboard 中添加以下 Secret:
+#   API_KEY = sk-RPo8Q8Lf9_SKoNMSjo5DNA
+#   API_BASE_URL = https://llm.tokencloud.ai/v1
+#   MODEL_NAME = DeepSeek-V3
